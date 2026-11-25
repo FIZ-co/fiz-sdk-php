@@ -733,38 +733,47 @@ final class ClientTest extends TestCase
         self::assertArrayNotHasKey('x-api-key', $mock->requests[1]['headers']);
     }
 
-    public function testSendsNoneOfTheGuzzleClientsOwnCredentialsToAForeignLink(): void
+    public function testNeverSendsAForeignLinkThroughTheCallersClient(): void
     {
-        // An integration that put its credential on the Guzzle client itself
-        // (default headers, auth, cookies, query) must not leak it to the host
-        // that stores the file. Recorded in the handler, after every middleware.
-        $seen = [];
-        $handler = function (RequestInterface $request) use (&$seen) {
-            $seen[] = $request;
-            if ($request->getUri()->getHost() === 'api.fiz.co') {
-                return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/json'], json_encode(
-                    ['id' => 'f1', 'name' => 'FT.pdf', 'url' => 'https://files.example.com/FT.pdf'],
-                    JSON_THROW_ON_ERROR,
-                )));
-            }
-            return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/pdf'], '%PDF'));
+        // An integration may put its credential anywhere on its Guzzle client:
+        // default headers, auth, cookies, query, or a middleware that adds it
+        // to every request. None of it may reach the host that stores the
+        // file, so that request never goes through the caller's client.
+        $hooked = [];
+        $api = function (RequestInterface $request) {
+            self::assertSame('api.fiz.co', $request->getUri()->getHost(), 'a foreign link reached httpClient');
+            return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/json'], json_encode(
+                ['id' => 'f1', 'name' => 'FT.pdf', 'url' => 'https://files.example.com/FT.pdf'],
+                JSON_THROW_ON_ERROR,
+            )));
         };
-        $jar = \GuzzleHttp\Cookie\CookieJar::fromArray(['session' => 'client-cookie'], 'files.example.com');
+        $stack = \GuzzleHttp\HandlerStack::create($api);
+        $stack->push(\GuzzleHttp\Middleware::mapRequest(function (RequestInterface $request) use (&$hooked) {
+            $hooked[] = $request->getUri()->getHost();
+            return $request->withHeader('Authorization', 'Bearer from-a-middleware');
+        }));
         $client = new \GuzzleHttp\Client([
-            'handler' => \GuzzleHttp\HandlerStack::create($handler),
+            'handler' => $stack,
             'headers' => ['Authorization' => 'Bearer client-default', 'x-api-key' => 'client-default'],
             'auth' => ['user', 'secret'],
-            'cookies' => $jar,
+            'cookies' => \GuzzleHttp\Cookie\CookieJar::fromArray(['session' => 'client-cookie'], 'files.example.com'),
             'query' => ['token' => 'client-default'],
         ]);
+        $files = [];
+        $storage = function (RequestInterface $request) use (&$files) {
+            $files[] = $request;
+            return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/pdf'], '%PDF'));
+        };
         $fiz = new Fiz(['apiKey' => 'fiz_live_key', 'httpClient' => $client]);
+        MockFiz::replaceFileClient($fiz, new \GuzzleHttp\Client(['handler' => \GuzzleHttp\HandlerStack::create($storage)]));
         self::assertSame('%PDF', $fiz->invoices->downloadPdf('inv1'));
-        $foreign = end($seen);
-        self::assertSame('files.example.com', $foreign->getUri()->getHost());
+        self::assertSame(['api.fiz.co'], $hooked);
+        self::assertCount(1, $files);
+        self::assertSame('files.example.com', $files[0]->getUri()->getHost());
         foreach (['Authorization', 'x-api-key', 'Cookie'] as $header) {
-            self::assertFalse($foreign->hasHeader($header), "$header was sent");
+            self::assertFalse($files[0]->hasHeader($header), "$header was sent");
         }
-        self::assertSame('', $foreign->getUri()->getQuery());
+        self::assertSame('', $files[0]->getUri()->getQuery());
     }
 
     public function testReportsAFailedDownloadAsAFizException(): void

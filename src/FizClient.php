@@ -94,6 +94,8 @@ final class FizClient
     /** @var array<string, string> */
     private readonly array $authHeaders;
     private readonly ClientInterface $httpClient;
+    /** For files on another origin, created on first use (see download()). */
+    private ?GuzzleClientInterface $fileClient = null;
     private readonly RequestFactoryInterface $requestFactory;
     private readonly StreamFactoryInterface $streamFactory;
     private readonly string $userAgent;
@@ -352,9 +354,11 @@ final class FizClient
 
     /**
      * @param array<string, string> $headers
-     * @param bool $bare For another origin (where a file is stored): none of
-     *        the Guzzle client's own defaults that could carry a credential
-     *        (headers, auth, cookies, query) is applied.
+     * @param bool $bare For another origin (where a file is stored): sent with
+     *        a Guzzle client of the SDK's own, never the caller's. Their
+     *        client's defaults (headers, auth, cookies, query) could be left
+     *        out of a request, but its handler stack (middleware) runs on
+     *        every request sent through it and may add a credential.
      */
     private function attempt(string $method, string $url, array $headers, ?string $body, float $timeout, bool $bare = false): ResponseInterface
     {
@@ -365,18 +369,19 @@ final class FizClient
         if ($body !== null) {
             $request = $request->withBody($this->streamFactory->createStream($body));
         }
-        if ($this->httpClient instanceof GuzzleClientInterface) {
-            return $this->httpClient->send($request, [
+        $client = $bare ? ($this->fileClient ??= new GuzzleClient()) : $this->httpClient;
+        if ($client instanceof GuzzleClientInterface) {
+            return $client->send($request, [
                 'timeout' => $timeout,
                 // Never followed automatically: a redirect keeps custom headers such
                 // as x-api-key, whatever origin it points to.
                 'allow_redirects' => false,
                 'http_errors' => false,
-            ] + ($bare ? ['headers' => null, 'auth' => null, 'cookies' => false, 'query' => null] : []));
+            ]);
         }
         // Any other PSR-18 client: its own timeout and redirect settings apply
         // (README, "HTTP client").
-        return $this->httpClient->sendRequest($request);
+        return $client->sendRequest($request);
     }
 
     /**

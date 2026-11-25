@@ -248,10 +248,11 @@ does not know is refused rather than ignored.
 
 By default the SDK sends requests with its own Guzzle client. Pass a Guzzle
 client of yours to add a proxy or middleware; the SDK still sets the timeout
-and turns redirects off on every request. When `downloadPdf` fetches the file
-from another host (where the PDF is stored), it also leaves out that client's
-default `headers`, `auth`, `cookies` and `query`, so a credential configured
-on the client stays with the API:
+and turns redirects off on every request. A file the API links to on another
+host (where a PDF is stored) is fetched with a Guzzle client of the SDK's own,
+never yours, so nothing configured on yours (headers, auth, cookies, query,
+middleware) reaches that host; cURL still honours the `https_proxy`
+environment variable:
 
 ```php
 use GuzzleHttp\Client;
@@ -265,8 +266,8 @@ PSR-17 factories as `requestFactory` and `streamFactory` if you do not want
 Guzzle's. Configure it **not to follow redirects** (with Symfony,
 `'max_redirects' => 0`), because a redirect would carry the API key to
 wherever it points, and give it its own timeout: `timeout` applies to Guzzle
-clients only. Keep credentials off such a client's defaults too: the SDK cannot
-remove them from a file download to another host, and sends the API key itself.
+clients only. Files on another host are fetched with the SDK's own Guzzle client, not
+this one.
 
 ## Static analysis
 

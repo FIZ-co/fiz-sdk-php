@@ -54,9 +54,18 @@ final class MockFiz
             ['apiKey' => 'fiz_live_key', 'httpClient' => new Client(['handler' => HandlerStack::create($handler)])],
             $options,
         ));
+        // Files on another origin go through the SDK's own client: answered by
+        // the same queue, so a test reads every request in order.
+        self::replaceFileClient($this->fiz, new Client(['handler' => HandlerStack::create($handler)]));
         self::replaceSleep($this->fiz, function (float $ms): void {
             $this->sleeps[] = $ms;
         });
+    }
+
+    public static function replaceFileClient(Fiz $fiz, Client $fileClient): void
+    {
+        $client = (new \ReflectionProperty(Fiz::class, 'client'))->getValue($fiz);
+        (new \ReflectionProperty(FizClient::class, 'fileClient'))->setValue($client, $fileClient);
     }
 
     public static function replaceSleep(Fiz $fiz, \Closure $sleep): void
