@@ -96,12 +96,6 @@ final class FizClient
     private readonly ClientInterface $httpClient;
     /** For files on another origin, created on first use (see download()). */
     private ?GuzzleClientInterface $fileClient = null;
-    /**
-     * The status line and headers of the current attempt, kept as they
-     * arrive (Guzzle `on_headers`): a timeout while the body is read throws
-     * a ConnectException that carries no response.
-     */
-    private ?ResponseInterface $headersReceived = null;
     private readonly RequestFactoryInterface $requestFactory;
     private readonly StreamFactoryInterface $streamFactory;
     private readonly string $userAgent;
@@ -211,9 +205,14 @@ final class FizClient
             $payload = null;
             $sentAt = hrtime(true);
             try {
-                $response = $this->attempt($method, $url, $headers, $body, $timeout);
+                // This attempt's status line and headers as they arrived: a
+                // timeout while the body is read throws a ConnectException that
+                // carries no response. Local to the attempt, so a call made
+                // meanwhile (from a callback or middleware) cannot replace it.
+                $received = null;
+                $response = $this->attempt($method, $url, $headers, $body, $timeout, false, $received);
             } catch (ClientExceptionInterface $error) {
-                $response = self::partialResponse($error) ?? $this->headersReceived;
+                $response = self::partialResponse($error) ?? $received;
                 if ($response === null) {
                     if (!$repeatable || !$canRetry) {
                         throw self::noResponseError($error, "$method $path", $timeout, $idempotencyKey);
@@ -366,9 +365,15 @@ final class FizClient
      *        out of a request, but its handler stack (middleware) runs on
      *        every request sent through it and may add a credential.
      */
-    private function attempt(string $method, string $url, array $headers, ?string $body, float $timeout, bool $bare = false): ResponseInterface
-    {
-        $this->headersReceived = null;
+    private function attempt(
+        string $method,
+        string $url,
+        array $headers,
+        ?string $body,
+        float $timeout,
+        bool $bare = false,
+        ?ResponseInterface &$received = null,
+    ): ResponseInterface {
         // A request to another origin is built by the SDK too: the caller's
         // factory may add a header (a token) to every request it creates.
         $factory = $bare ? new HttpFactory() : $this->requestFactory;
@@ -390,12 +395,7 @@ final class FizClient
                 // The status is known before the body: a body cut off by the
                 // timeout must not turn a 503 or a 429 into "no response",
                 // which a keyed write would retry.
-                // (Typed loosely: Guzzle's MockHandler passes its queued item.)
-                'on_headers' => function (mixed $response): void {
-                    if ($response instanceof ResponseInterface) {
-                        $this->headersReceived = $response;
-                    }
-                },
+                'on_headers' => self::onHeaders($client, $received),
             ]);
         }
         // Any other PSR-18 client: its own timeout and redirect settings apply
@@ -562,6 +562,31 @@ final class FizClient
             }
         }
         return preg_match('/timed out|timeout/i', $error->getMessage()) === 1;
+    }
+
+    /**
+     * The `on_headers` of an attempt: records the response into `$received`,
+     * then calls the client's own `on_headers`, if it has one (a request
+     * option replaces the client's default, so it is called from here). That
+     * one may throw to abort the transfer (a size check, say): Guzzle then
+     * reports a RequestException that carries the response.
+     *
+     * Typed loosely: Guzzle's MockHandler passes its queued item.
+     */
+    private static function onHeaders(GuzzleClientInterface $client, ?ResponseInterface &$received): \Closure
+    {
+        // getConfig() is deprecated in Guzzle 7 and gone in 8; it is the only
+        // way to read a client's default.
+        // @phpstan-ignore function.alreadyNarrowedType (true in Guzzle 7 only)
+        $own = method_exists($client, 'getConfig') ? $client->getConfig('on_headers') : null;
+        return static function (mixed $response) use (&$received, $own): void {
+            if ($response instanceof ResponseInterface) {
+                $received = $response;
+            }
+            if (is_callable($own)) {
+                $own($response);
+            }
+        };
     }
 
     /**

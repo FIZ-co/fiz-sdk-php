@@ -760,6 +760,56 @@ final class ClientTest extends TestCase
         self::assertCount(1, $mock->requests);
     }
 
+    public function testStillCallsTheClientsOwnOnHeaders(): void
+    {
+        // An integration may check a response in its client's on_headers
+        // (its size, say) before the body is read; the SDK's own must not
+        // replace it.
+        $seen = [];
+        $handler = static function (RequestInterface $request, array $options): \GuzzleHttp\Promise\PromiseInterface {
+            $response = new Response(200, ['content-type' => 'application/json', 'content-length' => '15'], '{"id":"comp1"}');
+            $options['on_headers']($response);
+            return new \GuzzleHttp\Promise\FulfilledPromise($response);
+        };
+        $client = new \GuzzleHttp\Client([
+            'handler' => \GuzzleHttp\HandlerStack::create($handler),
+            'on_headers' => static function (ResponseInterface $response) use (&$seen): void {
+                $seen[] = $response->getHeaderLine('content-length');
+            },
+        ]);
+        $fiz = new Fiz(['apiKey' => 'fiz_live_key', 'httpClient' => $client]);
+        $fiz->company->retrieve();
+        self::assertSame(['15'], $seen);
+    }
+
+    public function testKeepsItsOwnStatusWhenACallInsideOnHeadersAnswersFirst(): void
+    {
+        // The client's on_headers makes another SDK call (to log, say) while
+        // the outer attempt's body is still to come, and that body then times
+        // out: the outer 429 must decide, not the inner call's 200.
+        $handler = static function (RequestInterface $request, array $options): \GuzzleHttp\Promise\PromiseInterface {
+            if ($request->getUri()->getPath() === '/company') {
+                $response = new Response(200, ['content-type' => 'application/json'], '{"id":"comp1"}');
+                $options['on_headers']($response);
+                return new \GuzzleHttp\Promise\FulfilledPromise($response);
+            }
+            $options['on_headers'](new Response(429, ['retry-after' => '120']));
+            throw new ConnectException('cURL error 28: Operation timed out', $request, null, ['errno' => 28]);
+        };
+        $fiz = null;
+        $client = new \GuzzleHttp\Client([
+            'handler' => \GuzzleHttp\HandlerStack::create($handler),
+            'on_headers' => static function (ResponseInterface $response) use (&$fiz): void {
+                if ($response->getStatusCode() === 429) {
+                    $fiz?->company->retrieve();
+                }
+            },
+        ]);
+        $fiz = new Fiz(['apiKey' => 'fiz_live_key', 'httpClient' => $client]);
+        $error = self::thrown(fn () => $fiz->customers->create(self::CUSTOMER, ['idempotencyKey' => 'k']));
+        self::assertInstanceOf(FizRateLimitException::class, $error, $error::class . ': ' . $error->getMessage());
+    }
+
     public function testBuildsAForeignRequestWithItsOwnFactory(): void
     {
         // A caller's request factory may add a header (a token) to every
