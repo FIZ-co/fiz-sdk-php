@@ -63,7 +63,12 @@ function createDraft(Fiz $fiz): void
         'customerId' => $customer['id'],
         'items' => [['id' => $item['id'], 'quantity' => 1]],
     ]);
-    file_put_contents('draft.pdf', $fiz->invoices->downloadPdf($draft['id']));
+    // The issue command below is printed only once the PDF to look at is on
+    // disk: a failed write could leave an earlier draft's PDF in its place.
+    if (file_put_contents('draft.pdf', $fiz->invoices->downloadPdf($draft['id'])) === false) {
+        echo "Could not save draft.pdf, so there is nothing to look at: no issue command.\n";
+        return;
+    }
     // The revision is what makes the second run issue exactly this draft.
     // Without one there is nothing to check against, so there is no command.
     if ($draft['updatedAt'] === null || $draft['updatedAt'] === '') {

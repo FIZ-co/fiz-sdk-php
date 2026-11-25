@@ -96,6 +96,12 @@ final class FizClient
     private readonly ClientInterface $httpClient;
     /** For files on another origin, created on first use (see download()). */
     private ?GuzzleClientInterface $fileClient = null;
+    /**
+     * The status line and headers of the current attempt, kept as they
+     * arrive (Guzzle `on_headers`): a timeout while the body is read throws
+     * a ConnectException that carries no response.
+     */
+    private ?ResponseInterface $headersReceived = null;
     private readonly RequestFactoryInterface $requestFactory;
     private readonly StreamFactoryInterface $streamFactory;
     private readonly string $userAgent;
@@ -207,7 +213,7 @@ final class FizClient
             try {
                 $response = $this->attempt($method, $url, $headers, $body, $timeout);
             } catch (ClientExceptionInterface $error) {
-                $response = self::partialResponse($error);
+                $response = self::partialResponse($error) ?? $this->headersReceived;
                 if ($response === null) {
                     if (!$repeatable || !$canRetry) {
                         throw self::noResponseError($error, "$method $path", $timeout, $idempotencyKey);
@@ -362,7 +368,11 @@ final class FizClient
      */
     private function attempt(string $method, string $url, array $headers, ?string $body, float $timeout, bool $bare = false): ResponseInterface
     {
-        $request = $this->requestFactory->createRequest($method, $url);
+        $this->headersReceived = null;
+        // A request to another origin is built by the SDK too: the caller's
+        // factory may add a header (a token) to every request it creates.
+        $factory = $bare ? new HttpFactory() : $this->requestFactory;
+        $request = $factory->createRequest($method, $url);
         foreach ($headers as $name => $value) {
             $request = $request->withHeader($name, $value);
         }
@@ -377,6 +387,15 @@ final class FizClient
                 // as x-api-key, whatever origin it points to.
                 'allow_redirects' => false,
                 'http_errors' => false,
+                // The status is known before the body: a body cut off by the
+                // timeout must not turn a 503 or a 429 into "no response",
+                // which a keyed write would retry.
+                // (Typed loosely: Guzzle's MockHandler passes its queued item.)
+                'on_headers' => function (mixed $response): void {
+                    if ($response instanceof ResponseInterface) {
+                        $this->headersReceived = $response;
+                    }
+                },
             ]);
         }
         // Any other PSR-18 client: its own timeout and redirect settings apply
@@ -547,7 +566,9 @@ final class FizClient
 
     /**
      * The response of a transfer that failed after its headers arrived (Guzzle
-     * reports a body cut off mid-way like this): its status is known.
+     * reports some bodies cut off mid-way like this; a timeout while reading
+     * comes as a ConnectException, covered by `on_headers`): its status is
+     * known.
      */
     private static function partialResponse(ClientExceptionInterface $error): ?ResponseInterface
     {

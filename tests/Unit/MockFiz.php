@@ -30,7 +30,7 @@ final class MockFiz
     public array $sleeps = [];
 
     /**
-     * @param list<array{status: int, body?: mixed, headers?: array<string, string>}|\Throwable|callable(RequestInterface): ResponseInterface> $replies
+     * @param list<array{status: int, body?: mixed, headers?: array<string, string>}|\Throwable|callable(RequestInterface, array<string, mixed>): ResponseInterface> $replies
      * @param array<string, mixed> $options
      */
     public function __construct(array $replies, array $options = [])
@@ -41,7 +41,7 @@ final class MockFiz
                 throw $reply;
             }
             if (is_callable($reply)) {
-                return $reply($request);
+                return $reply($request, $transferOptions);
             }
             return new Response(
                 $reply['status'],

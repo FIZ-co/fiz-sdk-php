@@ -65,7 +65,9 @@ $draft = $fiz->invoices->create([
     'customerId' => $customer['id'],
     'items' => [['id' => $item['id'], 'quantity' => 1]],
 ]);
-file_put_contents('draft.pdf', $fiz->invoices->downloadPdf($draft['id']));
+if (file_put_contents('draft.pdf', $fiz->invoices->downloadPdf($draft['id'])) === false) {
+    throw new RuntimeException('Could not save draft.pdf: nothing to look at, so nothing to issue.');
+}
 // The revision pins what you are about to look at. Without one there is nothing
 // to check the issue against: stop rather than issue whatever the draft is by then.
 if ($draft['updatedAt'] === null) {

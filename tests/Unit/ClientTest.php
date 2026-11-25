@@ -733,6 +733,54 @@ final class ClientTest extends TestCase
         self::assertArrayNotHasKey('x-api-key', $mock->requests[1]['headers']);
     }
 
+    /** @return iterable<string, array{int, array<string, string>, class-string}> */
+    public static function statusesWhoseBodyTimesOut(): iterable
+    {
+        yield '503 on a keyed write' => [503, [], FizServerException::class];
+        yield '429 asking for longer than the SDK waits' => [429, ['retry-after' => '120'], FizRateLimitException::class];
+    }
+
+    /**
+     * @param array<string, string> $headers
+     * @param class-string $expected
+     */
+    #[DataProvider('statusesWhoseBodyTimesOut')]
+    public function testKeepsTheStatusWhenTheTimeoutCutsTheBodyOff(int $status, array $headers, string $expected): void
+    {
+        // cURL reports a timeout while reading the body as a ConnectException
+        // carrying no response: without the headers kept as they arrived, the
+        // SDK would take it for "no response" and retry the write.
+        $timeoutAfterHeaders = static function (RequestInterface $request, array $options) use ($status, $headers): never {
+            $options['on_headers'](new Response($status, $headers));
+            throw new ConnectException('cURL error 28: Operation timed out', $request, null, ['errno' => 28]);
+        };
+        $mock = new MockFiz([$timeoutAfterHeaders, ['status' => 201, 'body' => ['id' => 'c1']]]);
+        $error = self::thrown(fn () => $mock->fiz->customers->create(self::CUSTOMER, ['idempotencyKey' => 'k']));
+        self::assertInstanceOf($expected, $error, $error::class . ': ' . $error->getMessage());
+        self::assertCount(1, $mock->requests);
+    }
+
+    public function testBuildsAForeignRequestWithItsOwnFactory(): void
+    {
+        // A caller's request factory may add a header (a token) to every
+        // request it creates; the host that stores the file must not get it.
+        $factory = new class () implements \Psr\Http\Message\RequestFactoryInterface {
+            public function createRequest(string $method, $uri): RequestInterface
+            {
+                return (new \GuzzleHttp\Psr7\HttpFactory())->createRequest($method, $uri)
+                    ->withHeader('Authorization', 'Bearer from-a-factory');
+            }
+        };
+        $mock = new MockFiz([
+            ['status' => 200, 'body' => ['id' => 'f1', 'name' => 'FT.pdf', 'url' => 'https://files.example.com/FT.pdf']],
+            self::text(200, '%PDF', 'application/pdf'),
+        ], ['requestFactory' => $factory]);
+        self::assertSame('%PDF', $mock->fiz->invoices->downloadPdf('inv1'));
+        self::assertSame('Bearer from-a-factory', $mock->requests[0]['headers']['authorization'] ?? null);
+        self::assertSame('files.example.com', $mock->requests[1]['host']);
+        self::assertArrayNotHasKey('authorization', $mock->requests[1]['headers']);
+    }
+
     public function testNeverSendsAForeignLinkThroughTheCallersClient(): void
     {
         // An integration may put its credential anywhere on its Guzzle client:
