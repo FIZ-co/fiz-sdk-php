@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+      - run: composer validate --strict
+      # No lock file (a library): the newest versions that fit each PHP.
+      - run: composer update --no-interaction --no-progress --prefer-dist
+      - name: Generated code matches openapi/openapi.json
+        run: composer generate && git diff --exit-code src/Generated
+      - run: composer check
+      # Packagist publishes every tag; the tag must name the version the code reports.
+      - name: Tag matches Fiz::VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(php -r 'require "vendor/autoload.php"; echo Fiz\Fiz::VERSION;')" = "$GITHUB_REF_NAME"

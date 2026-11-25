@@ -1,0 +1,27 @@
+name: Sandbox
+
+# The quickstart end to end against the FIZ API sandbox (no fiscal effect),
+# with every response checked against the API document. Needs the
+# FIZ_TEST_API_KEY secret (a fiz_test_ key); skips without it.
+on:
+  schedule:
+    - cron: '41 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          tools: composer:v2
+      - run: composer update --no-interaction --no-progress --prefer-dist
+      - run: composer test:sandbox
+        env:
+          FIZ_TEST_API_KEY: ${{ secrets.FIZ_TEST_API_KEY }}
