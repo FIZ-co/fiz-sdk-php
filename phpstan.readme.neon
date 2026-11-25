@@ -1,0 +1,5 @@
+# README.md's PHP blocks, cut into tests/readme/ by scripts/check-readme.php.
+parameters:
+    level: max
+    paths:
+        - tests/readme
