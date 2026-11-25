@@ -297,9 +297,10 @@ final class FizClient
         $start = UriResolver::resolve(new Uri($this->baseUrl), new Uri($fileUrl));
         $uri = $start;
         for ($hop = 0; $hop <= self::MAX_REDIRECTS; $hop++) {
-            $headers = self::origin($uri) === $apiOrigin ? ['user-agent' => $this->userAgent] + $this->authHeaders : [];
+            $own = self::origin($uri) === $apiOrigin;
+            $headers = ['user-agent' => $this->userAgent] + ($own ? $this->authHeaders : []);
             try {
-                $response = $this->attempt('GET', (string) $uri, $headers, null, $timeout);
+                $response = $this->attempt('GET', (string) $uri, $headers, null, $timeout, bare: !$own);
             } catch (ClientExceptionInterface $error) {
                 throw self::noResponseError($error, "Downloading {$uri->getPath()}", $timeout, null);
             }
@@ -349,8 +350,13 @@ final class FizClient
         }
     }
 
-    /** @param array<string, string> $headers */
-    private function attempt(string $method, string $url, array $headers, ?string $body, float $timeout): ResponseInterface
+    /**
+     * @param array<string, string> $headers
+     * @param bool $bare For another origin (where a file is stored): none of
+     *        the Guzzle client's own defaults that could carry a credential
+     *        (headers, auth, cookies, query) is applied.
+     */
+    private function attempt(string $method, string $url, array $headers, ?string $body, float $timeout, bool $bare = false): ResponseInterface
     {
         $request = $this->requestFactory->createRequest($method, $url);
         foreach ($headers as $name => $value) {
@@ -366,7 +372,7 @@ final class FizClient
                 // as x-api-key, whatever origin it points to.
                 'allow_redirects' => false,
                 'http_errors' => false,
-            ]);
+            ] + ($bare ? ['headers' => null, 'auth' => null, 'cookies' => false, 'query' => null] : []));
         }
         // Any other PSR-18 client: its own timeout and redirect settings apply
         // (README, "HTTP client").

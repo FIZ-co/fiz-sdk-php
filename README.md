@@ -25,9 +25,10 @@ the server, in the environment, never in a template or front-end code.
 
 Run it with a **sandbox key**: create one at [app.fiz.co → Settings → Integrations](https://app.fiz.co/settings/integrations)
 and put it in `FIZ_API_KEY`. A key starting with `fiz_test_` sends documents
-to the AT test services, with no fiscal effect. The walkthrough below stops on
-any other key, because its last step issues a real invoice with a production
-key.
+to the AT test services, with no fiscal effect. Both steps below stop on any
+other key, because the second one issues a real invoice with a production key.
+
+**Step 1: a draft and its PDF.** A draft has no number and no fiscal effect.
 
 ```php
 <?php
@@ -58,8 +59,6 @@ $item = $fiz->items->create([
     'unitPrice' => 10,
     'vatRate' => 'NORMAL',
 ]);
-
-// A draft has no number and no fiscal effect.
 $draft = $fiz->invoices->create([
     'type' => 'INVOICE',
     'cae' => $cae,
@@ -67,22 +66,40 @@ $draft = $fiz->invoices->create([
     'items' => [['id' => $item['id'], 'quantity' => 1]],
 ]);
 file_put_contents('draft.pdf', $fiz->invoices->downloadPdf($draft['id']));
-
-// Issuing is fiscal and irreversible with a production key: numbered, ATCUD,
-// reported to the AT. expectedUpdatedAt issues exactly the draft you looked
-// at, and refuses it if it changed since.
-// Without a revision there is nothing to check against: stop rather than
-// issue whatever the draft is by then.
+// The revision pins what you are about to look at. Without one there is nothing
+// to check the issue against: stop rather than issue whatever the draft is by then.
 if ($draft['updatedAt'] === null) {
     throw new RuntimeException('The draft came back without its revision.');
 }
-$invoice = $fiz->invoices->issue($draft['id'], ['expectedUpdatedAt' => $draft['updatedAt']]);
+echo "Look at draft.pdf, then issue: {$draft['id']} {$draft['updatedAt']}\n";
+```
+
+**Step 2, once you have looked at the PDF: issue that draft.** Issuing is
+fiscal and irreversible with a production key: numbered, ATCUD, reported to
+the AT. `expectedUpdatedAt` issues exactly the draft you looked at, and the
+API refuses it if anyone changed it since.
+
+```php
+<?php
+require 'vendor/autoload.php';
+
+use Fiz\Fiz;
+
+$fiz = new Fiz();
+if ($fiz->environment !== 'sandbox') {
+    throw new RuntimeException('Use a sandbox key (fiz_test_…) for this walkthrough.');
+}
+
+// What step 1 printed.
+$draftId = 'the draft id';
+$revision = 'the revision';
+$invoice = $fiz->invoices->issue($draftId, ['expectedUpdatedAt' => $revision]);
 echo $invoice['number'], ' ', $invoice['atcud'], "\n";
 ```
 
-A runnable version is in [`examples/quickstart.php`](examples/quickstart.php).
-It issues in two runs: the first creates the draft and saves its PDF, the
-second issues that draft by its id, after you have looked at it.
+The same two steps as one runnable script are in
+[`examples/quickstart.php`](examples/quickstart.php): its first run creates
+the draft and saves its PDF, and a second run with `--issue` issues that draft.
 
 ## What it covers
 
@@ -231,7 +248,10 @@ does not know is refused rather than ignored.
 
 By default the SDK sends requests with its own Guzzle client. Pass a Guzzle
 client of yours to add a proxy or middleware; the SDK still sets the timeout
-and turns redirects off on every request:
+and turns redirects off on every request. When `downloadPdf` fetches the file
+from another host (where the PDF is stored), it also leaves out that client's
+default `headers`, `auth`, `cookies` and `query`, so a credential configured
+on the client stays with the API:
 
 ```php
 use GuzzleHttp\Client;
@@ -245,7 +265,8 @@ PSR-17 factories as `requestFactory` and `streamFactory` if you do not want
 Guzzle's. Configure it **not to follow redirects** (with Symfony,
 `'max_redirects' => 0`), because a redirect would carry the API key to
 wherever it points, and give it its own timeout: `timeout` applies to Guzzle
-clients only.
+clients only. Keep credentials off such a client's defaults too: the SDK cannot
+remove them from a file download to another host, and sends the API key itself.
 
 ## Static analysis
 

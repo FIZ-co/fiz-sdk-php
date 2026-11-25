@@ -733,6 +733,40 @@ final class ClientTest extends TestCase
         self::assertArrayNotHasKey('x-api-key', $mock->requests[1]['headers']);
     }
 
+    public function testSendsNoneOfTheGuzzleClientsOwnCredentialsToAForeignLink(): void
+    {
+        // An integration that put its credential on the Guzzle client itself
+        // (default headers, auth, cookies, query) must not leak it to the host
+        // that stores the file. Recorded in the handler, after every middleware.
+        $seen = [];
+        $handler = function (RequestInterface $request) use (&$seen) {
+            $seen[] = $request;
+            if ($request->getUri()->getHost() === 'api.fiz.co') {
+                return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/json'], json_encode(
+                    ['id' => 'f1', 'name' => 'FT.pdf', 'url' => 'https://files.example.com/FT.pdf'],
+                    JSON_THROW_ON_ERROR,
+                )));
+            }
+            return new \GuzzleHttp\Promise\FulfilledPromise(new Response(200, ['content-type' => 'application/pdf'], '%PDF'));
+        };
+        $jar = \GuzzleHttp\Cookie\CookieJar::fromArray(['session' => 'client-cookie'], 'files.example.com');
+        $client = new \GuzzleHttp\Client([
+            'handler' => \GuzzleHttp\HandlerStack::create($handler),
+            'headers' => ['Authorization' => 'Bearer client-default', 'x-api-key' => 'client-default'],
+            'auth' => ['user', 'secret'],
+            'cookies' => $jar,
+            'query' => ['token' => 'client-default'],
+        ]);
+        $fiz = new Fiz(['apiKey' => 'fiz_live_key', 'httpClient' => $client]);
+        self::assertSame('%PDF', $fiz->invoices->downloadPdf('inv1'));
+        $foreign = end($seen);
+        self::assertSame('files.example.com', $foreign->getUri()->getHost());
+        foreach (['Authorization', 'x-api-key', 'Cookie'] as $header) {
+            self::assertFalse($foreign->hasHeader($header), "$header was sent");
+        }
+        self::assertSame('', $foreign->getUri()->getQuery());
+    }
+
     public function testReportsAFailedDownloadAsAFizException(): void
     {
         $mock = new MockFiz([
