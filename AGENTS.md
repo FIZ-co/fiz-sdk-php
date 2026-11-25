@@ -81,6 +81,10 @@ push. Without a local PHP, run the same in a container, e.g.
 - **Every API operation has a resource method.** `tests/Unit/CoverageTest.php`
   fails until a new operation is wrapped; until then it is reachable through
   `$fiz->call('<operationId>')`.
+- **`method-map.json` follows the resource methods.** The API docs at
+  api.fiz.co show each operation in PHP from it (method and arguments).
+  After adding or renaming a method run `composer method-map`;
+  `tests/Unit/MethodMapTest.php` fails while it is out of date.
 - **The client's safety rules are behaviour, not style.** A change to any of
   them comes with a test that fails on the previous client:
   - one `Idempotency-Key` per call, reused by every retry; an invalid key is

@@ -81,7 +81,8 @@
             "@phpstan",
             "@check:readme",
             "@test"
-        ]
+        ],
+        "method-map": "@php scripts/method-map.php"
     },
     "scripts-descriptions": {
         "generate": "Regenerate src/Generated/ from openapi/openapi.json",
@@ -91,6 +92,7 @@
         "check:readme": "Lint and analyse every PHP block of README.md",
         "test": "Unit tests (mocked HTTP)",
         "test:sandbox": "End-to-end tests against the API sandbox (needs FIZ_TEST_API_KEY)",
-        "check": "Everything CI runs"
+        "check": "Everything CI runs",
+        "method-map": "Rewrites method-map.json (the method behind each API operation, for the API docs)."
     }
 }
